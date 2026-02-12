@@ -244,6 +244,20 @@ class FromCSVFile(PredictionDataset):
         return result
 
 
+class _IndexedCrops(list):
+    """List of crops with the dataset index attached for correct batch
+    collation.
+
+    MultiImage.__getitem__ returns (index, crops) as _IndexedCrops so
+    collate_fn can record global dataset indices instead of batch
+    positions.
+    """
+
+    def __init__(self, index: int, crops: list):
+        super().__init__(crops)
+        self.index = index
+
+
 class MultiImage(PredictionDataset):
     """Take in a list of image paths, preprocess and batch together.
 
@@ -347,27 +361,24 @@ class MultiImage(PredictionDataset):
 
         return windows
 
+    def __getitem__(self, idx):
+        """Return crops with dataset index so collate_fn can use global
+        indices."""
+        return _IndexedCrops(idx, self.get_crop(idx))
+
     def collate_fn(self, batch):
         """Collate the batch into a single list of crops.
 
-        Keep track of the lengths of each sublist.
+        Keep track of the lengths of each sublist using global dataset
+        indices (item.index), not batch position, so postprocess assigns
+        image_path correctly.
         """
-        # Create a list of lengths of each sublist
-        sub_list_length = [
-            [idx, sub_idx]
-            for idx, sublist in enumerate(batch)
-            for sub_idx in range(len(sublist))
-        ]
-        self.sublist_lengths.append(sub_list_length)
-
-        # Flatten list of lists of crops
-        flattened_batch = [crop for sublist in batch for crop in sublist]
+        # item.index is the global dataset index; sublist is the list of crops
         sublist_lengths = [
-            [idx, sub_idx]
-            for idx, sublist in enumerate(batch)
-            for sub_idx in range(len(sublist))
+            [item.index, sub_idx] for item in batch for sub_idx in range(len(item))
         ]
-
+        self.sublist_lengths.append(sublist_lengths)
+        flattened_batch = [crop for item in batch for crop in item]
         return {"images": flattened_batch, "sublist_lengths": sublist_lengths}
 
     def __len__(self):
